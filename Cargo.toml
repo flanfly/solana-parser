@@ -1,0 +1,18 @@
+[package]
+name = "solana-parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+borsh = "1.5.7"
+futures-util = "0.3.31"
+prost = "0.11.9" # must match solana-storage-proto version
+reqwest = { version = "0.12.23", features = ["stream"] }
+solana-bincode = "3.0.0"
+solana-sdk = "3.0.0"
+solana-storage-proto = "3.0.6"
+solana-transaction-status = "3.0.6"
+tokio = { version = "1.47.1", features = ["fs", "full"] }
+tokio-util = "0.7.16"
+yellowstone-faithful-car-parser = "1.0.0"
+zstd = "0.13.3"
