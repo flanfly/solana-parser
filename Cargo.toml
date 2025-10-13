@@ -4,10 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+arrow = "56.2.0"
 borsh = "1.5.7"
+ctrlc = "3.5.0"
 futures-util = "0.3.31"
+parquet = { version = "56.2.0", features = ["async", "arrow"] }
 prost = "0.11.9" # must match solana-storage-proto version
 reqwest = { version = "0.12.23", features = ["stream"] }
+smallvec = "1.15.1"
 solana-bincode = "3.0.0"
 solana-sdk = "3.0.0"
 solana-storage-proto = "3.0.6"
