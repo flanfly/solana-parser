@@ -1,62 +1,42 @@
-use std::collections::VecDeque;
 use std::io;
+use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
-use std::time;
 
-use humansize::{DECIMAL, format_size};
-use time_humanize::HumanTime;
+use tokio::fs;
 use tokio::io::AsyncRead;
 
-static TRACKING_WINDOW: LazyLock<time::Duration> = LazyLock::new(|| time::Duration::from_secs(20));
+use indicatif::{ProgressBar, ProgressStyle};
+use serde::{Deserialize, Serialize};
 
-pub struct TrackingReader<R: AsyncRead + Unpin> {
+use crate::Result;
+
+const DEFAULT_EPOCH: u64 = 0;
+
+pub struct ProgressReader<R: AsyncRead + Unpin> {
     inner: R,
-    total: u64,
-    bytes_read: Arc<AtomicU64>,
-    observations: VecDeque<(usize, time::Instant)>,
-    last_print: time::Instant,
+    progress_bar: ProgressBar,
 }
 
-impl<R: AsyncRead + Unpin> TrackingReader<R> {
-    pub fn new(counter: Arc<AtomicU64>, total: u64, inner: R) -> Self {
+impl<R: AsyncRead + Unpin> ProgressReader<R> {
+    pub fn new(total: u64, inner: R) -> Self {
+        let pb = ProgressBar::new(total);
+        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+
         Self {
             inner,
-            total,
-            bytes_read: counter,
-            observations: VecDeque::new(),
-            last_print: time::Instant::now(),
+            progress_bar: pb,
         }
     }
 
-    fn estimated_time_remaining(&mut self, now: time::Instant) -> (f32, time::Duration) {
-        // trim old observations
-        while let Some((_, t)) = self.observations.front() {
-            if now.duration_since(*t) > *TRACKING_WINDOW {
-                self.observations.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        let consumed_bytes = self.observations.iter().map(|(b, _)| *b).sum::<usize>();
-        let consumed_secs = self
-            .observations
-            .iter()
-            .map(|(_, t)| now.duration_since(*t).as_secs_f64())
-            .sum::<f64>();
-
-        let rate = consumed_bytes as f64 / consumed_secs;
-        let eta = (self.total - self.bytes_read.load(Ordering::SeqCst)) as f64 / rate;
-
-        (rate as f32, time::Duration::from_secs_f64(eta))
+    pub fn progress_bar(&self) -> ProgressBar {
+        self.progress_bar.clone()
     }
 }
 
-impl<R: AsyncRead + Unpin> AsyncRead for TrackingReader<R> {
+impl<R: AsyncRead + Unpin> AsyncRead for ProgressReader<R> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -68,30 +48,41 @@ impl<R: AsyncRead + Unpin> AsyncRead for TrackingReader<R> {
         let res = Pin::new(&mut unpinned.inner).poll_read(cx, buf);
         if let Poll::Ready(Ok(())) = &res {
             if buf.filled().len() > filled {
-                let now = time::Instant::now();
                 let n = buf.filled().len() - filled;
-
-                unpinned.observations.push_back((n, now));
-                unpinned.bytes_read.fetch_add(n as u64, Ordering::SeqCst);
-                if now.duration_since(unpinned.last_print) < time::Duration::from_millis(300) {
-                    return res;
-                }
-
-                let (rate, eta) = unpinned.estimated_time_remaining(now);
-                let pct = (unpinned.bytes_read.load(Ordering::SeqCst) as f32
-                    / unpinned.total as f32)
-                    * 100.0;
-                println!(
-                    "Read {}/{} bytes ({:.2}%), {:.2} bytes/sec, ETA: {}",
-                    format_size(unpinned.bytes_read.load(Ordering::SeqCst) as u64, DECIMAL),
-                    format_size(unpinned.total as u64, DECIMAL),
-                    pct,
-                    rate,
-                    HumanTime::from(eta)
-                );
-                unpinned.last_print = now;
+                unpinned.progress_bar.inc(n as u64);
             }
         }
         res
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Progress {
+    pub epoch: u64,
+    pub end_offset: u64,
+    pub slot: u64,
+}
+
+impl Default for Progress {
+    fn default() -> Self {
+        Self {
+            epoch: DEFAULT_EPOCH,
+            end_offset: 0,
+            slot: 0,
+        }
+    }
+}
+
+impl Progress {
+    pub async fn save(&self, path: &Path) -> Result<()> {
+        let s = toml::to_string(&self)?;
+        fs::write(path, s).await?;
+        Ok(())
+    }
+
+    pub async fn load(path: &Path) -> Result<Self> {
+        let content = fs::read_to_string(path).await?;
+        let p: Progress = toml::from_str(&content)?;
+        Ok(p)
     }
 }

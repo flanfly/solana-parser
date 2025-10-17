@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -7,44 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
 use clap::Parser;
-use serde::{Deserialize, Serialize};
-use tokio::fs;
 
-use crate::Result;
+use solana_parser::Result;
 
-const DEFAULT_EPOCH: u64 = 0;
 const DEFAULT_PROGRESS_FILE: &str = "progress.toml";
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Progress {
-    pub epoch: u64,
-    pub end_offset: u64,
-    pub slot: u64,
-}
-
-impl Default for Progress {
-    fn default() -> Self {
-        Self {
-            epoch: DEFAULT_EPOCH,
-            end_offset: 0,
-            slot: 0,
-        }
-    }
-}
-
-impl Progress {
-    pub async fn save(&self, path: &Path) -> Result<()> {
-        let s = toml::to_string(&self)?;
-        fs::write(path, s).await?;
-        Ok(())
-    }
-
-    pub async fn load(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path).await?;
-        let p: Progress = toml::from_str(&content)?;
-        Ok(p)
-    }
-}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]

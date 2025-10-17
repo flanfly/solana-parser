@@ -3,13 +3,18 @@ name = "solana-parser"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 arrow = "56.2.0"
 borsh = "1.5.7"
 clap = { version = "4.5.49", features = ["derive"] }
+crossbeam = { version = "0.8.4", features = ["crossbeam-queue"] }
 ctrlc = "3.5.0"
 futures-util = "0.3.31"
 humansize = "2.1.3"
+indicatif = "0.18.0"
 parquet = { version = "56.2.0", features = ["async", "arrow"] }
 prost = "0.11.9" # must match solana-storage-proto version
 reqwest = { version = "0.12.23", features = ["stream"] }
@@ -20,7 +25,20 @@ solana-storage-proto = "3.0.6"
 solana-transaction-status = "3.0.6"
 time-humanize = "0.1.3"
 tokio = { version = "1.47.1", features = ["fs", "full"] }
+tokio-scoped = "0.2.0"
 tokio-util = "0.7.16"
 toml = "0.9.8"
 yellowstone-faithful-car-parser = "1.0.0"
 zstd = "0.13.3"
+
+[dev-dependencies]
+criterion = { version = "0.7.0", features = ["async_tokio"] }
+
+[[bin]]
+name = "solana-parser"
+path = "src/bin/parser/main.rs"
+
+[[bench]]
+name = "parser_bench"
+harness = false
+

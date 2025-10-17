@@ -9,10 +9,10 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_writer::AsyncFileWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-
-use solana_sdk::{pubkey::Pubkey, signature::Signature};
+use solana_sdk::signature::Signature;
 
 use crate::Result;
+use crate::pump::{CreateEvent, TradeEvent};
 
 static TICK_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     SchemaRef::new(Schema::new(vec![
@@ -33,7 +33,6 @@ static TICK_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
 
 pub struct TickBuilder<W: AsyncFileWriter + Unpin + Send> {
     epoch: Option<u64>,
-    slot: Option<u64>,
     writer: AsyncArrowWriter<W>,
 
     // builders
@@ -59,7 +58,6 @@ impl<W: AsyncFileWriter + Send + Unpin> TickBuilder<W> {
         let aaw = AsyncArrowWriter::try_new(fd, TICK_SCHEMA.clone(), Some(props))?;
         let t = Self {
             epoch: None,
-            slot: None,
             writer: aaw,
             col_epoch: UInt64Builder::with_capacity(batch_size),
             col_slot: UInt64Builder::with_capacity(batch_size),
@@ -82,40 +80,27 @@ impl<W: AsyncFileWriter + Send + Unpin> TickBuilder<W> {
         self.epoch = Some(epoch);
     }
 
-    pub fn slot(&mut self, slot: u64) {
-        self.slot = Some(slot);
-    }
-
     pub fn rows(&self) -> usize {
         self.col_epoch.len()
     }
 
-    pub fn append(
-        &mut self,
-        tx: &Signature,
-        mint: &Pubkey,
-        is_buy: bool,
-        sol: u64,
-        token: u64,
-        timestamp: i64,
-        virtual_sol: u64,
-        virtual_token: u64,
-        real_sol: u64,
-        real_token: u64,
-    ) {
+    pub fn append(&mut self, slot: u64, tx: Signature, event: TradeEvent) {
         self.col_epoch
             .append_value(self.epoch.expect("epoch not set"));
-        self.col_slot.append_value(self.slot.expect("slot not set"));
+        self.col_slot.append_value(slot);
         self.col_transaction.append_value(tx.to_string());
-        self.col_mint.append_value(mint.to_string());
-        self.col_is_buy.append_value(is_buy);
-        self.col_sol.append_value(sol);
-        self.col_token.append_value(token);
-        self.col_timestamp.append_value(timestamp);
-        self.col_virtual_sol.append_value(virtual_sol);
-        self.col_virtual_token.append_value(virtual_token);
-        self.col_real_sol.append_value(real_sol);
-        self.col_real_token.append_value(real_token);
+        self.col_mint.append_value(event.mint.to_string());
+        self.col_is_buy.append_value(event.is_buy);
+        self.col_sol.append_value(event.sol_amount);
+        self.col_token.append_value(event.token_amount);
+        self.col_timestamp.append_value(event.timestamp);
+        self.col_virtual_sol
+            .append_value(event.virtual_sol_reserves);
+        self.col_virtual_token
+            .append_value(event.virtual_token_reserves);
+        self.col_real_sol.append_value(event.virtual_sol_reserves);
+        self.col_real_token
+            .append_value(event.virtual_token_reserves);
     }
 
     pub async fn write(&mut self) -> Result<()> {
@@ -163,7 +148,6 @@ static TOKEN_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
 
 pub struct TokenBuilder<W: AsyncFileWriter + Unpin + Send> {
     epoch: Option<u64>,
-    slot: Option<u64>,
     writer: AsyncArrowWriter<W>,
 
     // builders
@@ -188,7 +172,6 @@ impl<W: AsyncFileWriter + Send + Unpin> TokenBuilder<W> {
         let aaw = AsyncArrowWriter::try_new(fd, TOKEN_SCHEMA.clone(), Some(props))?;
         let t = Self {
             epoch: None,
-            slot: None,
             writer: aaw,
             col_epoch: UInt64Builder::with_capacity(batch_size),
             col_slot: UInt64Builder::with_capacity(batch_size),
@@ -210,46 +193,31 @@ impl<W: AsyncFileWriter + Send + Unpin> TokenBuilder<W> {
         self.epoch = Some(epoch);
     }
 
-    pub fn slot(&mut self, slot: u64) {
-        self.slot = Some(slot);
-    }
-
     pub fn rows(&self) -> usize {
         self.col_epoch.len()
     }
 
-    pub fn append(
-        &mut self,
-        tx: &Signature,
-        name: &str,
-        symbol: &str,
-        uri: &str,
-        mint: &Pubkey,
-        timestamp: i64,
-        virtual_token: Option<u64>,
-        virtual_sol: Option<u64>,
-        real_token: Option<u64>,
-    ) {
+    pub fn append(&mut self, slot: u64, tx: Signature, event: CreateEvent) {
         self.col_epoch
             .append_value(self.epoch.expect("epoch not set"));
-        self.col_slot.append_value(self.slot.expect("slot not set"));
+        self.col_slot.append_value(slot);
         self.col_transaction.append_value(tx.to_string());
-        self.col_name.append_value(name);
-        self.col_symbol.append_value(symbol);
-        self.col_uri.append_value(uri);
-        self.col_mint.append_value(mint.to_string());
-        self.col_timestamp.append_value(timestamp);
-        if let Some(vt) = virtual_token {
+        self.col_name.append_value(event.name);
+        self.col_symbol.append_value(event.symbol);
+        self.col_uri.append_value(event.uri);
+        self.col_mint.append_value(event.mint.to_string());
+        self.col_timestamp.append_value(event.timestamp);
+        if let Some(vt) = event.virtual_token_reserves {
             self.col_virtual_token.append_value(vt);
         } else {
             self.col_virtual_token.append_null();
         }
-        if let Some(vs) = virtual_sol {
+        if let Some(vs) = event.virtual_sol_reserves {
             self.col_virtual_sol.append_value(vs);
         } else {
             self.col_virtual_sol.append_null();
         }
-        if let Some(rt) = real_token {
+        if let Some(rt) = event.real_token_reserves {
             self.col_real_token.append_value(rt);
         } else {
             self.col_real_token.append_null();

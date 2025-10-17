@@ -1,31 +1,18 @@
 use std::io;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::{fs, select, try_join};
 use tokio_util::io::StreamReader;
 
-use yellowstone_faithful_car_parser::node::{Node, NodeReader, Nodes};
+use yellowstone_faithful_car_parser::node::NodeReader;
 
 use clap::Parser;
 use futures_util::TryStreamExt;
 use reqwest::{Client, Method, header};
 
-mod arrow;
-use crate::arrow::{TickBuilder, TokenBuilder};
-
-mod solana;
-use crate::solana::notify_block;
-
-mod pump;
+use solana_parser::{Progress, ProgressReader, Result, TickBuilder, TokenBuilder, consume_block};
 
 mod cli;
-use crate::cli::{Abort, Cli, Progress};
-
-mod reader;
-use reader::TrackingReader;
-
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use crate::cli::{Abort, Cli};
 
 async fn open_parquet_file(typ: &str, epoch: u64, start_offset: u64) -> Result<fs::File> {
     let path = format!("data/{}-{}-{}.parquet", typ, epoch, start_offset);
@@ -83,6 +70,9 @@ async fn main() -> Result<()> {
         open_parquet_file("tokens", progress.epoch, progress.end_offset),
     }?;
 
+    let ticks_fd = fs::File::open("/dev/null").await?;
+    let tokens_fd = fs::File::open("/dev/null").await?;
+
     let mut ticks = TickBuilder::new(ticks_fd, 1000)?;
     ticks.epoch(progress.epoch);
 
@@ -108,16 +98,15 @@ async fn main() -> Result<()> {
 
     println!("total_size={}", total_size);
 
-    let bytes_counter = Arc::new(AtomicU64::new(0));
-    let mut rd = NodeReader::new(TrackingReader::new(
-        bytes_counter.clone(),
-        total_size,
-        StreamReader::new(
-            resp.bytes_stream()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e)),
-        ),
-    ));
+    //let fd = fs::File::open("epoch-800.car").await?;
+    //let total_size = fd.metadata().await?.len();
 
+    let rd = StreamReader::new(
+        resp.bytes_stream()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e)),
+    );
+    let rd = ProgressReader::new(total_size, rd);
+    let mut rd = NodeReader::new(rd);
     let abort = Abort::new()?;
 
     loop {
@@ -130,35 +119,11 @@ async fn main() -> Result<()> {
                 }?;
                return Ok(());
             },
-            res = Nodes::read_until_block(&mut rd) => {
+            res = consume_block(&mut rd, &mut progress, &cli.progress_file, &mut ticks, &mut tokens) => {
                 match res {
-                    Ok(n) => {
-                        for (_, node) in n.nodes.iter() {
-                            match node {
-                                Node::Block(blk) => {
-                                    let next_block_offset = bytes_counter.load(Ordering::SeqCst);
-
-                                    ticks.slot(blk.slot);
-                                    tokens.slot(blk.slot);
-                                    notify_block(&n, blk,  &mut ticks, &mut tokens).await?;
-
-                                    // save progress
-                                    let ticks_written = ticks.rows();
-                                    let tokens_written = tokens.rows();
-                                    try_join!{tokens.write(), ticks.write()}?;
-
-                                    progress.slot = blk.slot;
-                                    progress.end_offset = next_block_offset as u64;
-                                    progress.save(&cli.progress_file).await?;
-
-                                    //println!("epoch={}, slot={}, ticks written={}, tokens written={}, offset={}", progress.epoch, blk.slot, ticks_written, tokens_written, next_block_offset);
-                                }
-                                Node::Epoch(_) | Node::Transaction(_) | Node::Entry(_) | Node::DataFrame(_) | Node::Subset(_) | Node::Rewards(_) => {}
-                            }
-                        }
-                    }
+                    Ok(()) => {}
                     Err(e) => {
-                        eprintln!("Error reading CAR: {}", e);
+                        println!("Error consuming block: {:?}, flushing and exiting...", e);
                         break;
                     }
                 }

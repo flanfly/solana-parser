@@ -2,16 +2,18 @@ use std::io::Read;
 use std::iter;
 use std::result;
 
+use crossbeam::queue::ArrayQueue;
 use solana_bincode::limited_deserialize;
 use solana_sdk::message::AddressLoader;
 use solana_sdk::message::v0::{LoadedAddresses, MessageAddressTableLookup};
+use solana_sdk::signature::Signature;
 use solana_sdk::transaction::{
     AddressLoaderError, SanitizedTransaction, SanitizedVersionedTransaction, VersionedTransaction,
 };
 use solana_storage_proto::convert::generated;
 use solana_transaction_status::TransactionStatusMeta;
 
-use tokio::fs;
+use tokio::task;
 
 use borsh::BorshDeserialize;
 use yellowstone_faithful_car_parser::node::{Block, Node, Nodes};
@@ -19,7 +21,6 @@ use yellowstone_faithful_car_parser::node::{Block, Node, Nodes};
 use prost::Message;
 
 use crate::Result;
-use crate::arrow::{TickBuilder, TokenBuilder};
 use crate::pump::{CreateEvent, EmitCpiInstruction, Event, Instruction, PROGRAM_ID, TradeEvent};
 
 #[derive(Debug, Clone)]
@@ -46,8 +47,8 @@ fn decompress_zstd(data: Vec<u8>) -> Result<Vec<u8>> {
 pub async fn notify_block(
     n: &Nodes,
     blk: &Block,
-    ticks: &mut TickBuilder<fs::File>,
-    tokens: &mut TokenBuilder<fs::File>,
+    ticks: &mut ArrayQueue<(u64, Signature, TradeEvent)>,
+    tokens: &mut ArrayQueue<(u64, Signature, CreateEvent)>,
 ) -> Result<()> {
     let txn = blk
         .entries
@@ -106,53 +107,19 @@ pub async fn notify_block(
         for isn in isns {
             match Instruction::try_from_slice(&isn.data) {
                 Ok(Instruction::EmitCpi(EmitCpiInstruction { event })) => match event {
-                    Event::Trade(TradeEvent {
-                        mint,
-                        sol_amount,
-                        token_amount,
-                        is_buy,
-                        timestamp,
-                        virtual_sol_reserves,
-                        virtual_token_reserves,
-                        real_sol_reserves,
-                        real_token_reserves,
-                        ..
-                    }) => {
-                        ticks.append(
-                            tx.signature(),
-                            &mint,
-                            is_buy,
-                            sol_amount,
-                            token_amount,
-                            timestamp,
-                            virtual_sol_reserves,
-                            virtual_token_reserves,
-                            real_sol_reserves,
-                            real_token_reserves,
-                        );
+                    Event::Trade(event) => {
+                        let mut tuple = (blk.slot, tx.signature().clone(), event);
+                        while let Err(t) = ticks.push(tuple) {
+                            tuple = t;
+                            task::yield_now().await;
+                        }
                     }
-                    Event::Create(CreateEvent {
-                        name,
-                        symbol,
-                        uri,
-                        mint,
-                        timestamp,
-                        virtual_token_reserves,
-                        virtual_sol_reserves,
-                        real_token_reserves,
-                        ..
-                    }) => {
-                        tokens.append(
-                            tx.signature(),
-                            &name,
-                            &symbol,
-                            &uri,
-                            &mint,
-                            timestamp,
-                            virtual_token_reserves,
-                            virtual_sol_reserves,
-                            real_token_reserves,
-                        );
+                    Event::Create(event) => {
+                        let mut tuple = (blk.slot, tx.signature().clone(), event);
+                        while let Err(t) = tokens.push(tuple) {
+                            tuple = t;
+                            task::yield_now().await;
+                        }
                     }
                     Event::Complete(_) | Event::CompletePumpAmm(_) | Event::Other(_) => {}
                 },
