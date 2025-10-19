@@ -2,7 +2,6 @@ use std::io::Read;
 use std::iter;
 use std::result;
 
-use crossbeam::queue::ArrayQueue;
 use solana_bincode::limited_deserialize;
 use solana_sdk::message::AddressLoader;
 use solana_sdk::message::v0::{LoadedAddresses, MessageAddressTableLookup};
@@ -12,8 +11,6 @@ use solana_sdk::transaction::{
 };
 use solana_storage_proto::convert::generated;
 use solana_transaction_status::TransactionStatusMeta;
-
-use tokio::task;
 
 use borsh::BorshDeserialize;
 use yellowstone_faithful_car_parser::node::{Block, Node, Nodes};
@@ -44,12 +41,13 @@ fn decompress_zstd(data: Vec<u8>) -> Result<Vec<u8>> {
     Ok(decompressed)
 }
 
-pub async fn notify_block(
+pub fn notify_block(
     n: &Nodes,
     blk: &Block,
-    ticks: &mut ArrayQueue<(u64, Signature, TradeEvent)>,
-    tokens: &mut ArrayQueue<(u64, Signature, CreateEvent)>,
-) -> Result<()> {
+) -> Result<(
+    Vec<(u64, Signature, TradeEvent)>,
+    Vec<(u64, Signature, CreateEvent)>,
+)> {
     let txn = blk
         .entries
         .iter()
@@ -62,6 +60,9 @@ pub async fn notify_block(
             Some(Node::Transaction(t)) => Some(t),
             _ => None,
         });
+
+    let mut ticks = Vec::with_capacity(100);
+    let mut tokens = Vec::with_capacity(10);
 
     for raw in txn {
         let mut metafrm = n.reassemble_dataframes(&raw.metadata)?;
@@ -108,18 +109,10 @@ pub async fn notify_block(
             match Instruction::try_from_slice(&isn.data) {
                 Ok(Instruction::EmitCpi(EmitCpiInstruction { event })) => match event {
                     Event::Trade(event) => {
-                        let mut tuple = (blk.slot, tx.signature().clone(), event);
-                        while let Err(t) = ticks.push(tuple) {
-                            tuple = t;
-                            task::yield_now().await;
-                        }
+                        ticks.push((blk.slot, tx.signature().clone(), event));
                     }
                     Event::Create(event) => {
-                        let mut tuple = (blk.slot, tx.signature().clone(), event);
-                        while let Err(t) = tokens.push(tuple) {
-                            tuple = t;
-                            task::yield_now().await;
-                        }
+                        tokens.push((blk.slot, tx.signature().clone(), event));
                     }
                     Event::Complete(_) | Event::CompletePumpAmm(_) | Event::Other(_) => {}
                 },
@@ -132,5 +125,5 @@ pub async fn notify_block(
         }
     }
 
-    Ok(())
+    Ok((ticks, tokens))
 }
