@@ -144,7 +144,7 @@ impl Configuration {
 
     pub async fn remove_checkpoint(&self) -> Result<()> {
         let mut base = self.checkpoint_file.clone();
-        base.set_path("");
+        base.set_path("/");
         let store = open_store(&base)?;
 
         store
@@ -162,7 +162,7 @@ impl Configuration {
         }
 
         let mut base = self.checkpoint_file.clone();
-        base.set_path("");
+        base.set_path("/");
         let store = open_store(&base)?;
 
         let c = toml::to_string(&s)?;
