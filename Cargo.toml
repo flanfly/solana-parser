@@ -3,8 +3,9 @@ name = "solana-parser"
 version = "0.1.0"
 edition = "2024"
 
-[lib]
-path = "src/lib.rs"
+[[bin]]
+name = "solana-parser"
+path = "src/main.rs"
 
 [dependencies]
 arrow = "56.2.0"
@@ -26,17 +27,8 @@ solana-transaction-status = "3.0.6"
 tokio = { version = "1.47.1", features = ["fs", "full"] }
 tokio-util = "0.7.16"
 toml = "0.9.8"
-yellowstone-faithful-car-parser = { version = "1.0.0", path = "../yellowstone-faithful-car-parser" }
+yellowstone-faithful-car-parser = "1.0.0"
 zstd = "0.13.3"
 
-[dev-dependencies]
-criterion = { version = "0.7.0", features = ["async_tokio"] }
-
-[[bin]]
-name = "solana-parser"
-path = "src/bin/parser/main.rs"
-
-[[bench]]
-name = "parser_bench"
-harness = false
-
+[patch.crates-io]
+yellowstone-faithful-car-parser = { git = 'https://github.com/flanfly/yellowstone-faithful-car-parser.git' }
