@@ -1,10 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf, absolute};
 
 use clap;
 use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml;
+use url::Url;
 
 use crate::Result;
 
@@ -21,7 +22,7 @@ pub struct Cli {
     pub checkpoint_file: PathBuf,
 
     #[arg(long = "data-dir", value_name = "DIR", default_value = "data")]
-    pub data_dir: PathBuf,
+    pub data_dir: String,
 
     #[arg(long = "tick-queue-size", default_value = "1000")]
     pub tick_queue_size: usize,
@@ -60,7 +61,7 @@ pub enum Input {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Configuration {
-    pub data_dir: PathBuf,
+    pub data_dir: Url,
     pub checkpoint_file: PathBuf,
     pub input: Input,
     pub tick_queue_size: usize,
@@ -81,8 +82,22 @@ impl Configuration {
             return Err("Either --local-file, --epoch or --resume must be specified".into());
         };
 
+        let data_dir = match Url::parse(&cli.data_dir) {
+            Ok(url) => url,
+            Err(url::ParseError::RelativeUrlWithoutBase) => {
+                let p = absolute(Path::new(&cli.data_dir))?;
+                Url::from_directory_path(p).map_err(|err| {
+                    format!(
+                        "Failed to parse data directory as URL or valid path: {:?}",
+                        err
+                    )
+                })?
+            }
+            Err(err) => return Err(err.into()),
+        };
+
         Ok(Self {
-            data_dir: cli.data_dir,
+            data_dir,
             checkpoint_file: cli.checkpoint_file,
             tick_queue_size: cli.tick_queue_size,
             token_queue_size: cli.token_queue_size,

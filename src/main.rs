@@ -1,14 +1,18 @@
 use std::fmt;
+use std::path::absolute;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time;
 
+use object_store::buffered;
 use parquet::arrow::async_writer::AsyncFileWriter;
 
 use tokio::sync::{mpsc, watch};
 use tokio::{fs, io, runtime, signal, task};
 use tokio::{select, try_join};
 use tokio_util::io::StreamReader;
+
+use object_store::{ObjectStore, gcp::GoogleCloudStorageBuilder, local::LocalFileSystem};
 
 use reqwest;
 
@@ -54,6 +58,15 @@ async fn run() -> Result<()> {
 
     let cli = Cli::parse();
     let cfg = Arc::new(Configuration::from_cli(cli).await?);
+
+    if cfg.data_dir.scheme() == "file" {
+        fs::create_dir_all(
+            cfg.data_dir
+                .to_file_path()
+                .map_err(|_| "Invalid data directory path")?,
+        )
+        .await?;
+    }
 
     let (epoch_rd, total_size) = open_input(&cfg).await?;
     let style = "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})";
@@ -299,25 +312,40 @@ async fn open_input(cfg: &Configuration) -> Result<(Pin<Box<dyn io::AsyncRead>>,
     }
 }
 
-async fn open_parquet_file(cfg: &Configuration, typ: impl AsRef<str>) -> Result<fs::File> {
+async fn open_parquet_file(
+    cfg: &Configuration,
+    typ: impl AsRef<str>,
+) -> Result<buffered::BufWriter> {
     let (epoch, offset) = match &cfg.input {
         &Input::Local { .. } => ("local".to_owned(), "0".to_owned()),
         &Input::Remote { epoch, offset } => (epoch.to_string(), offset.to_string()),
     };
-    let path = format!(
-        "{}/{}-epoch={}-offset={}.parquet",
-        cfg.data_dir.display(),
-        typ.as_ref(),
-        epoch,
-        offset
+
+    let store: Arc<dyn ObjectStore> = match cfg.data_dir.scheme() {
+        "file" => {
+            let maybe_p = cfg.data_dir.to_file_path().ok();
+            let p = absolute(maybe_p.unwrap_or_else(|| "./".to_string().into()))?;
+            Arc::new(LocalFileSystem::new_with_prefix(p)?)
+        }
+        "gs" => Arc::new(
+            GoogleCloudStorageBuilder::default()
+                .with_url(cfg.data_dir.as_str())
+                .build()?,
+        ),
+        _ => {
+            return Err(format!(
+                "Unsupported data directory scheme: {}",
+                cfg.data_dir.scheme()
+            )
+            .into());
+        }
+    };
+
+    let wr = buffered::BufWriter::new(
+        store,
+        format!("{}-epoch={}-offset={}.parquet", typ.as_ref(), epoch, offset).into(),
     );
-    let fd = fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(path)
-        .await?;
-    Ok(fd)
+    Ok(wr)
 }
 
 async fn stream_local(
