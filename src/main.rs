@@ -1,5 +1,4 @@
 use std::fmt;
-use std::path::absolute;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time;
@@ -13,6 +12,8 @@ use tokio::{select, try_join};
 use tokio_util::io::StreamReader;
 
 use object_store::{ObjectStore, gcp::GoogleCloudStorageBuilder, local::LocalFileSystem};
+
+use url::Url;
 
 use reqwest;
 
@@ -160,7 +161,7 @@ async fn run() -> Result<()> {
     token_task.await??;
 
     if total_size <= last_position {
-        fs::remove_file(&cfg.checkpoint_file).await?;
+        cfg.remove_checkpoint().await?;
     } else {
         cfg.checkpoint(last_position).await?;
     }
@@ -312,6 +313,24 @@ async fn open_input(cfg: &Configuration) -> Result<(Pin<Box<dyn io::AsyncRead>>,
     }
 }
 
+pub fn open_store(u: &Url) -> Result<Arc<dyn ObjectStore>> {
+    match u.scheme() {
+        "file" => {
+            let maybe_p = u.to_file_path().ok();
+            let p = maybe_p
+                .unwrap_or_else(|| "./".to_string().into())
+                .canonicalize()?;
+            Ok(Arc::new(LocalFileSystem::new_with_prefix(p)?))
+        }
+        "gs" => Ok(Arc::new(
+            GoogleCloudStorageBuilder::default()
+                .with_url(u.as_str())
+                .build()?,
+        )),
+        _ => Err(format!("Unsupported URL scheme: {}", u.scheme()).into()),
+    }
+}
+
 async fn open_parquet_file(
     cfg: &Configuration,
     typ: impl AsRef<str>,
@@ -321,28 +340,8 @@ async fn open_parquet_file(
         &Input::Remote { epoch, offset } => (epoch.to_string(), offset.to_string()),
     };
 
-    let store: Arc<dyn ObjectStore> = match cfg.data_dir.scheme() {
-        "file" => {
-            let maybe_p = cfg.data_dir.to_file_path().ok();
-            let p = absolute(maybe_p.unwrap_or_else(|| "./".to_string().into()))?;
-            Arc::new(LocalFileSystem::new_with_prefix(p)?)
-        }
-        "gs" => Arc::new(
-            GoogleCloudStorageBuilder::default()
-                .with_url(cfg.data_dir.as_str())
-                .build()?,
-        ),
-        _ => {
-            return Err(format!(
-                "Unsupported data directory scheme: {}",
-                cfg.data_dir.scheme()
-            )
-            .into());
-        }
-    };
-
     let wr = buffered::BufWriter::new(
-        store,
+        open_store(&cfg.data_dir)?,
         format!("{}-epoch={}-offset={}.parquet", typ.as_ref(), epoch, offset).into(),
     );
     Ok(wr)
