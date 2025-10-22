@@ -14,6 +14,11 @@ provider "google" {
   #credentials = file("service-account-key.json")
 }
 
+data "google_compute_zones" "all" {
+  project = local.project_id
+  region  = local.region
+}
+
 resource "google_storage_bucket" "provision" {
   name                        = "${local.project_id}-provision"
   location                    = local.region
@@ -61,35 +66,9 @@ resource "google_storage_bucket_iam_member" "output_bucket_writer" {
   member = "serviceAccount:${google_service_account.worker.email}"
 }
 
-resource "google_compute_network" "default" {
-  name                    = "${local.project_id}-network"
-  auto_create_subnetworks = false
-}
-
-resource "google_compute_subnetwork" "default" {
-  name          = "${local.project_id}-worker-subnet"
-  ip_cidr_range = "10.0.0.0/24"
-  region        = local.region
-  network       = google_compute_network.default.self_link
-}
-
-resource "google_compute_router" "default" {
-  name    = "${local.project_id}-router"
-  region  = local.region
-  network = google_compute_network.default.self_link
-}
-
-resource "google_compute_router_nat" "default" {
-  name                               = "${local.project_id}-nat"
-  router                             = google_compute_router.default.name
-  region                             = google_compute_router.default.region
-  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-  nat_ip_allocate_option             = "AUTO_ONLY"
-}
-
 resource "google_compute_firewall" "allow_ssh" {
   name    = "allow-ssh"
-  network = google_compute_network.default.name
+  network = "default"
 
   allow {
     protocol = "tcp"
@@ -122,7 +101,8 @@ resource "google_compute_region_instance_template" "default" {
   }
 
   network_interface {
-    subnetwork = google_compute_subnetwork.default.self_link
+    network = "default"
+    access_config {}
   }
   tags = ["allow-ssh"]
 
@@ -153,10 +133,10 @@ resource "google_compute_region_instance_group_manager" "default" {
     type                         = "PROACTIVE"
     instance_redistribution_type = "PROACTIVE"
     minimal_action               = "REPLACE"
-    max_surge_fixed              = 0
+    max_unavailable_fixed        = length(data.google_compute_zones.all.names)
   }
 
-  target_size = 1
+  target_size = 0
 }
 
 terraform {

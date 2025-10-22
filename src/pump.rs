@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::io::{ErrorKind, Read, Result};
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -14,7 +16,6 @@ pub const CREATE_DISCRIMINATOR: [u8; 8] = [24, 30, 200, 40, 5, 28, 7, 119];
 pub const MIGRATE_DISCRIMINATOR: [u8; 8] = [155, 234, 231, 146, 236, 158, 162, 30];
 pub const EMIT_CPI_DISCRIMINATOR: [u8; 8] = [228, 69, 165, 46, 81, 203, 154, 29];
 
-#[derive(Debug, Clone)]
 pub enum Instruction {
     Buy(BuyInstruction),
     Sell(SellInstruction),
@@ -59,7 +60,7 @@ impl BorshDeserialize for Instruction {
     }
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct BuyInstruction {
     pub amount: u64,
     pub max_sol_cost: u64,
@@ -107,7 +108,7 @@ fn deserialize_trailer<R: Read>(rd: &mut R) -> Result<Vec<u8>> {
     }
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct SellInstruction {
     pub amount: u64,
     pub min_sol_received: u64,
@@ -115,23 +116,23 @@ pub struct SellInstruction {
     pub trailer: Vec<u8>,
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct CreateInstruction {
-    pub name: String,
-    pub symbol: String,
-    pub uri: String,
-    pub creator: Pubkey,
+    name: String,
+    symbol: String,
+    uri: String,
+    creator: Pubkey,
     #[borsh(deserialize_with = "deserialize_trailer")]
-    pub trailer: Vec<u8>,
+    trailer: Vec<u8>,
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct MigrateInstruction {
     #[borsh(deserialize_with = "deserialize_trailer")]
-    pub trailer: Vec<u8>,
+    trailer: Vec<u8>,
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct EmitCpiInstruction {
     pub event: Event,
 }
@@ -141,7 +142,6 @@ pub const CREATE_EVENT_DISCRIMINATOR: [u8; 8] = [27, 114, 169, 77, 222, 235, 99,
 pub const COMPLETE_EVENT_DISCRIMINATOR: [u8; 8] = [95, 114, 97, 156, 212, 46, 152, 8];
 pub const COMPLETE_PUMP_AMM_EVENT_DISCRIMINATOR: [u8; 8] = [189, 233, 93, 185, 92, 148, 234, 148];
 
-#[derive(Debug, Clone)]
 pub enum Event {
     Trade(TradeEvent),
     Create(CreateEvent),
@@ -181,7 +181,7 @@ impl BorshDeserialize for Event {
     }
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct TradeEvent {
     pub mint: Pubkey,
     pub sol_amount: u64,
@@ -221,7 +221,7 @@ pub struct TradeEvent {
     pub last_update_timestamp: Option<i64>,
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct CreateEvent {
     pub name: String,
     pub symbol: String,
@@ -243,7 +243,7 @@ pub struct CreateEvent {
     pub token_total_supply: Option<u64>,
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct CompleteEvent {
     pub user: Pubkey,
     pub mint: Pubkey,
@@ -251,14 +251,14 @@ pub struct CompleteEvent {
     pub timestamp: i64,
 }
 
-#[derive(Debug, Clone, BorshDeserialize)]
+#[derive(BorshDeserialize)]
 pub struct CompletePumpAmmEvent {
-    pub user: Pubkey,
-    pub mint: Pubkey,
-    pub mint_amount: u64,
-    pub sol_amount: u64,
-    pub pool_migration_fee: u64,
-    pub bonding_curve: Pubkey,
-    pub timestamp: i64,
-    pub pool: Pubkey,
+    user: Pubkey,
+    mint: Pubkey,
+    mint_amount: u64,
+    sol_amount: u64,
+    pool_migration_fee: u64,
+    bonding_curve: Pubkey,
+    timestamp: i64,
+    pool: Pubkey,
 }
