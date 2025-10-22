@@ -1,0 +1,54 @@
+#!/bin/sh
+
+set -eu
+
+if [ "$(id -u)" -eq 0 ]; then
+  # install dependencies
+  sudo apt-get update
+  sudo apt-get install -y wget tmux
+
+  # create a non-root user with sudo privileges
+  adduser --disabled-password --ingroup sudo "${user_name}"
+  #echo "${user_name} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${user_name}"
+  #chmod 0440 "/etc/sudoers.d/${user_name}"
+
+  # re-execute the script as the non-root user
+  TMPFILE=$(mktemp /tmp/startup.XXXXXX)
+  cp "$0" "$TMPFILE"
+  chmod 755 "$TMPFILE"
+  exec su - "${user_name}" -c "tmux new-session -d -s solana-parser $TMPFILE"
+fi
+
+LAST_EPOCH=867
+
+STAMP=$(mktemp /tmp/solana-parser-stamp-XXXXXX)
+echo 1 > "$STAMP"
+
+wget "https://github.com/flanfly/solana-parser/releases/download/${version}/solana-parser" -O solana-parser
+chmod +x ./solana-parser
+
+for E in $(seq "${epoch}" $LAST_EPOCH); do
+  echo "Processing epoch $E..."
+
+  CHECKPOINT="gs://${bucket_name}/checkpoint-$E.toml"
+  DONE="gs://${bucket_name}/epoch-$E.done"
+
+  if gsutil -q stat "$DONE"; then
+    echo "Epoch $E already processed, skipping."
+    continue
+  fi
+
+  if gsutil stat "$CHECKPOINT"; then
+    ./solana-parser \
+      --resume \
+      --checkpoint-file "$CHECKPOINT"
+  else
+    ./solana-parser \
+      -e "${epoch}" \
+      --data-dir "gs://${bucket_name}/data/" \
+      --checkpoint-file "$CHECKPOINT"
+  fi
+
+  gsutil rm "$CHECKPOINT"
+  gsutil cp "$STAMP" "$DONE"
+done
