@@ -1,5 +1,6 @@
 use std::fmt;
 use std::pin::Pin;
+use std::process;
 use std::sync::Arc;
 use std::time;
 
@@ -127,6 +128,7 @@ async fn run() -> Result<()> {
                 Err(e) => {
                     error!("Error reading nodes: {}", e);
                     exit_tx.send(true)?;
+                    msg_tx.send(Message::Close).await?;
                     break;
                 }
             },
@@ -162,6 +164,7 @@ async fn run() -> Result<()> {
         cfg.remove_checkpoint().await?;
     } else {
         cfg.checkpoint(last_position).await?;
+        process::exit(255);
     }
 
     Ok(())
