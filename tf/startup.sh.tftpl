@@ -30,7 +30,6 @@ chmod +x ./solana-parser
 for E in $(seq "${epoch}" $LAST_EPOCH); do
   echo "Processing epoch $E..."
 
-  CHECKPOINT="gs://${bucket_name}/checkpoint-$E.toml"
   DONE="gs://${bucket_name}/epoch-$E.done"
 
   if gsutil -q stat "$DONE"; then
@@ -38,17 +37,7 @@ for E in $(seq "${epoch}" $LAST_EPOCH); do
     continue
   fi
 
-  if gsutil stat "$CHECKPOINT"; then
-    ./solana-parser \
-      --resume \
-      --checkpoint-file "$CHECKPOINT"
-  else
-    ./solana-parser \
-      -e "${epoch}" \
-      --data-dir "gs://${bucket_name}/data/" \
-      --checkpoint-file "$CHECKPOINT"
-  fi
+  ./solana-parser -e "$E" --data-dir "gs://${bucket_name}/data/"
 
-  gsutil rm "$CHECKPOINT"
   gsutil cp "$STAMP" "$DONE"
 done

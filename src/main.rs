@@ -90,28 +90,23 @@ async fn run() -> Result<()> {
         open_parquet_file(&cfg, "tokens"),
     )?;
 
-    let (ticks_tx, ticks_rx) = mpsc::channel(cfg.tick_queue_size);
-    let (tokens_tx, tokens_rx) = mpsc::channel(cfg.token_queue_size);
+    let (msg_tx, msg_rx) = mpsc::channel(cfg.tick_queue_size);
     let (exit_tx, exit_rx) = watch::channel(false);
 
-    let tick_task = task::spawn({
+    let write_task = task::spawn({
         let cfg = cfg.clone();
-        let exit_rx = exit_rx.clone();
-        async move { write_ticks(&cfg, ticks_rx, exit_rx, ticks_wr).await }
-    });
-    let token_task = task::spawn({
-        let cfg = cfg.clone();
-        let exit_rx = exit_rx.clone();
-        async move { write_tokens(&cfg, tokens_rx, exit_rx, tokens_wr).await }
+        async move { write_messages(&cfg, msg_rx, ticks_wr, tokens_wr).await }
     });
 
     tokio::spawn({
         let exit_tx = exit_tx.clone();
+        let msg_tx = msg_tx.clone();
         async move {
             signal::ctrl_c().await.unwrap();
             if !*exit_tx.borrow() {
                 info!("Received Ctrl-C, shutting down...");
                 exit_tx.send(true).unwrap();
+                msg_tx.send(Message::Close).await.unwrap();
             } else {
                 info!("Received Ctrl-C again, forcing shutdown...");
                 std::process::exit(1);
@@ -143,22 +138,25 @@ async fn run() -> Result<()> {
 
         last_position = progress.position();
 
-        let ticks_tx = ticks_tx.clone();
-        let tokens_tx = tokens_tx.clone();
-        worktasks.spawn(async move { consume_nodes(nodes, ticks_tx, tokens_tx).await });
+        worktasks.spawn({
+            let msg_tx = msg_tx.clone();
+            async move { consume_nodes(nodes, msg_tx).await }
+        });
 
         if last_checkpoint.elapsed() >= std::time::Duration::from_secs(30) {
             info!("Writing checkpoint...");
             if let Err(err) = cfg.checkpoint(last_position).await {
                 warn!("Failed to write checkpoint: {}", err);
             }
+            if let Err(err) = msg_tx.send(Message::Sync).await {
+                warn!("Failed to send sync message: {}", err);
+            }
             last_checkpoint = time::Instant::now();
         }
     }
 
     worktasks.join_all().await;
-    tick_task.await??;
-    token_task.await??;
+    write_task.await??;
 
     if total_size <= last_position {
         cfg.remove_checkpoint().await?;
@@ -197,11 +195,14 @@ impl<R: io::AsyncRead + Unpin> io::AsyncRead for ProgressReader<R> {
     }
 }
 
-async fn consume_nodes(
-    n: Nodes,
-    ticks_tx: mpsc::Sender<(u64, Signature, TradeEvent)>,
-    tokens_tx: mpsc::Sender<(u64, Signature, CreateEvent)>,
-) -> Result<()> {
+enum Message {
+    Tick(u64, Signature, TradeEvent),
+    Token(u64, Signature, CreateEvent),
+    Sync,
+    Close,
+}
+
+async fn consume_nodes(n: Nodes, msg_tx: mpsc::Sender<Message>) -> Result<()> {
     let mut wt = task::JoinSet::new();
 
     for (_, node) in n.nodes.iter() {
@@ -212,16 +213,18 @@ async fn consume_nodes(
         };
 
         let (ticks, tokens) = notify_block(&n, &blk)?;
-        for t in ticks {
+        for (slot, sig, ev) in ticks {
             wt.spawn({
-                let ticks_tx = ticks_tx.clone();
-                async move { ticks_tx.send(t).await.map_err(|e| e.to_string()) }
+                let msg_tx = msg_tx.clone();
+                let msg = Message::Tick(slot, sig, ev);
+                async move { msg_tx.send(msg).await.map_err(|e| e.to_string()) }
             });
         }
-        for t in tokens {
+        for (slot, sig, ev) in tokens {
             wt.spawn({
-                let tokens_tx = tokens_tx.clone();
-                async move { tokens_tx.send(t).await.map_err(|e| e.to_string()) }
+                let msg_tx = msg_tx.clone();
+                let msg = Message::Token(slot, sig, ev);
+                async move { msg_tx.send(msg).await.map_err(|e| e.to_string()) }
             });
         }
     }
@@ -230,79 +233,52 @@ async fn consume_nodes(
     Ok(())
 }
 
-async fn write_ticks<W>(
+async fn write_messages<W>(
     cfg: &Configuration,
-    mut rx: mpsc::Receiver<(u64, Signature, TradeEvent)>,
-    mut exit_rx: watch::Receiver<bool>,
-    fd: W,
+    mut rx: mpsc::Receiver<Message>,
+    tick_fd: W,
+    token_fd: W,
 ) -> Result<()>
 where
     W: AsyncFileWriter + Unpin + Send,
 {
-    let mut tick_builder = TickBuilder::new(fd, cfg.tick_batch_size)?;
-    tick_builder.epoch(match &cfg.input {
+    let mut tick_builder = TickBuilder::new(tick_fd, cfg.tick_batch_size)?;
+    let mut token_builder = TokenBuilder::new(token_fd, cfg.token_batch_size)?;
+    let epoch = match &cfg.input {
         &Input::Local { .. } => 0,
         &Input::Remote { epoch, .. } => epoch,
-    });
+    };
 
-    loop {
-        select! {
-            _ = exit_rx.changed() => {
-                rx.close();
-            },
-            maybe_tuple = rx.recv() => match maybe_tuple {
-                Some((slot, tx, event)) => {
-                    tick_builder.append(slot, tx, event);
-                    if tick_builder.rows() >= cfg.tick_batch_size {
-                        tick_builder.write().await?;
-                    }
-                },
-                None => {
-                    break;
+    tick_builder.epoch(epoch);
+    token_builder.epoch(epoch);
+
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            Message::Tick(slot, tx, event) => {
+                tick_builder.append(slot, tx, event);
+                if tick_builder.rows() >= cfg.tick_batch_size {
+                    tick_builder.write().await?;
                 }
-            },
+            }
+            Message::Token(slot, tx, event) => {
+                token_builder.append(slot, tx, event);
+                if token_builder.rows() >= cfg.token_batch_size {
+                    token_builder.write().await?;
+                }
+            }
+            Message::Sync => {
+                try_join!(tick_builder.flush(), token_builder.flush())?;
+                info!("Synchronized parquet writers");
+            }
+            Message::Close => {
+                break;
+            }
         }
     }
 
-    tick_builder.close().await?;
-    Ok(())
-}
+    try_join!(tick_builder.close(), token_builder.close())?;
+    info!("Parquet writers closed");
 
-async fn write_tokens<W>(
-    cfg: &Configuration,
-    mut rx: mpsc::Receiver<(u64, Signature, CreateEvent)>,
-    mut exit_rx: watch::Receiver<bool>,
-    fd: W,
-) -> Result<()>
-where
-    W: AsyncFileWriter + Unpin + Send,
-{
-    let mut token_builder = TokenBuilder::new(fd, cfg.token_batch_size)?;
-    token_builder.epoch(match &cfg.input {
-        &Input::Local { .. } => 0,
-        &Input::Remote { epoch, .. } => epoch,
-    });
-
-    loop {
-        select! {
-            _ = exit_rx.changed() => {
-                rx.close();
-            },
-            maybe_tuple = rx.recv() => match maybe_tuple {
-                Some((slot, tx, event)) => {
-                    token_builder.append(slot, tx, event);
-                    if token_builder.rows() >= cfg.token_batch_size {
-                        token_builder.write().await?;
-                    }
-                },
-                None => {
-                    break;
-                }
-            },
-        }
-    }
-
-    token_builder.close().await?;
     Ok(())
 }
 

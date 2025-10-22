@@ -1,5 +1,5 @@
-use std::ffi::OsString;
 use std::path::Path;
+use std::{ffi::OsString, path::absolute};
 
 use clap;
 use log::info;
@@ -125,7 +125,7 @@ fn to_url(path: &str) -> Result<Url> {
     match Url::parse(path) {
         Ok(url) => Ok(url),
         Err(url::ParseError::RelativeUrlWithoutBase) => {
-            let p = Path::new(path).canonicalize()?;
+            let p = Path::new(path).canonicalize().or_else(|_| absolute(path))?;
             Ok(Url::from_file_path(p).map_err(|err| {
                 format!("Failed to parse path as URL or valid file path: {:?}", err)
             })?)
