@@ -8,7 +8,7 @@ use parquet::arrow::async_writer::AsyncFileWriter;
 
 use tokio::sync::{mpsc, watch};
 use tokio::{fs, io, runtime, signal, task};
-use tokio::{select, try_join};
+use tokio::{join, select, try_join};
 use tokio_util::io::StreamReader;
 
 use object_store::{ObjectStore, gcp::GoogleCloudStorageBuilder, local::LocalFileSystem};
@@ -276,7 +276,7 @@ where
         }
     }
 
-    try_join!(tick_builder.close(), token_builder.close())?;
+    join!(tick_builder.close(), token_builder.close());
     info!("Parquet writers closed");
 
     Ok(())
