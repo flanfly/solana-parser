@@ -3,9 +3,10 @@ locals {
   region     = "asia-southeast1"
   machine    = "c4a-standard-2"
 
-  version   = "v1"
-  epoch     = "802"
+  version   = "v2"
+  epoch     = "800"
   user_name = "app"
+  nodes     = 0
 }
 
 provider "google" {
@@ -136,7 +137,7 @@ resource "google_compute_region_instance_group_manager" "default" {
     max_unavailable_fixed        = length(data.google_compute_zones.all.names)
   }
 
-  target_size = 0
+  target_size = local.nodes
 }
 
 terraform {
