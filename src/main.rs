@@ -2,6 +2,7 @@ use std::fmt;
 use std::pin::Pin;
 use std::process;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time;
 
 use object_store::buffered;
@@ -22,8 +23,7 @@ use solana_sdk::signature::Signature;
 
 use yellowstone_faithful_car_parser::node::{Node, NodeReader, Nodes};
 
-use indicatif::{HumanDuration, MultiProgress, ProgressBar, ProgressState, ProgressStyle};
-use indicatif_log_bridge::LogWrapper;
+use indicatif::{HumanDuration, ProgressBar, ProgressState, ProgressStyle};
 
 use log::{error, info, warn};
 
@@ -39,6 +39,11 @@ use crate::pump::{CreateEvent, TradeEvent};
 mod solana;
 use crate::solana::notify_block;
 
+mod logger;
+use crate::logger::setup_log;
+
+const VERSION: &str = env!("VERSION");
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 fn main() -> Result<()> {
@@ -51,15 +56,14 @@ fn main() -> Result<()> {
 async fn run() -> Result<()> {
     use clap::Parser;
 
-    let logger =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
-    let bars = MultiProgress::new();
-    let level = logger.filter();
-    LogWrapper::new(bars.clone(), logger).try_init()?;
-    log::set_max_level(level);
-
     let cli = Cli::parse();
     let cfg = Arc::new(Configuration::from_cli(cli).await?);
+
+    let bars = setup_log(cfg.gcloud_log.as_deref())?;
+    info!("solana-parser {}", VERSION);
+
+    info!("Writing data to: {}", cfg.data_dir);
+    info!("Checkpoint file: {}", cfg.checkpoint_file);
 
     if cfg.data_dir.scheme() == "file" {
         fs::create_dir_all(
@@ -76,14 +80,22 @@ async fn run() -> Result<()> {
         write!(w, "{:.1}s", HumanDuration(state.eta())).unwrap();
     };
 
-    let progress = bars.add(ProgressBar::new(total_size));
-    progress.set_position(cfg.offset());
-    progress.reset_eta();
-    progress.set_style(
-        ProgressStyle::with_template(style)?
-            .with_key("eta", eta_lambda)
-            .progress_chars("#>-"),
-    );
+    info!("Total input size: {} bytes", total_size);
+
+    let progress = if cfg.enable_progress {
+        let p = bars.add(ProgressBar::new(total_size));
+        p.set_position(cfg.offset());
+        p.reset_eta();
+        p.set_style(
+            ProgressStyle::with_template(style)?
+                .with_key("eta", eta_lambda)
+                .progress_chars("#>-"),
+        );
+        Some(p)
+    } else {
+        None
+    };
+
     let mut progress_rd = ProgressReader::new(epoch_rd, progress.clone());
 
     let (ticks_wr, tokens_wr) = try_join!(
@@ -91,7 +103,7 @@ async fn run() -> Result<()> {
         open_parquet_file(&cfg, "tokens"),
     )?;
 
-    let (msg_tx, msg_rx) = mpsc::channel(cfg.tick_queue_size);
+    let (msg_tx, msg_rx) = mpsc::channel(cfg.message_queue_size);
     let (exit_tx, exit_rx) = watch::channel(false);
 
     let write_task = task::spawn({
@@ -126,7 +138,7 @@ async fn run() -> Result<()> {
             res = Nodes::read_until_block(&mut rd) => match res {
                 Ok(n) => n,
                 Err(e) => {
-                    error!("Error reading nodes: {}", e);
+                    error!("Error reading nodes: {:?}", e);
                     exit_tx.send(true)?;
                     msg_tx.send(Message::Close).await?;
                     break;
@@ -138,7 +150,7 @@ async fn run() -> Result<()> {
             },
         };
 
-        last_position = progress.position();
+        last_position = progress_rd.position();
 
         worktasks.spawn({
             let msg_tx = msg_tx.clone();
@@ -146,7 +158,7 @@ async fn run() -> Result<()> {
         });
 
         if last_checkpoint.elapsed() >= std::time::Duration::from_secs(30) {
-            info!("Writing checkpoint...");
+            info!("Writing checkpoint at position {}", last_position);
             if let Err(err) = cfg.checkpoint(last_position).await {
                 warn!("Failed to write checkpoint: {}", err);
             }
@@ -172,12 +184,21 @@ async fn run() -> Result<()> {
 
 struct ProgressReader<R> {
     inner: R,
-    progress: ProgressBar,
+    position: AtomicU64,
+    progress: Option<ProgressBar>,
 }
 
 impl<R: io::AsyncRead + Unpin> ProgressReader<R> {
-    fn new(inner: R, progress: ProgressBar) -> Self {
-        Self { inner, progress }
+    fn new(inner: R, progress: Option<ProgressBar>) -> Self {
+        Self {
+            inner,
+            progress,
+            position: Default::default(),
+        }
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Relaxed)
     }
 }
 
@@ -189,11 +210,17 @@ impl<R: io::AsyncRead + Unpin> io::AsyncRead for ProgressReader<R> {
     ) -> std::task::Poll<std::io::Result<()>> {
         let pre_len = buf.filled().len();
         let poll = Pin::new(&mut self.inner).poll_read(cx, buf);
+
         if let std::task::Poll::Ready(Ok(())) = &poll {
             let new_len = buf.filled().len();
             let read_bytes = (new_len - pre_len) as u64;
-            self.progress.inc(read_bytes);
+
+            self.position.fetch_add(read_bytes, Ordering::Relaxed);
+            if let Some(progress) = &self.progress {
+                progress.set_position(self.position());
+            }
         }
+
         poll
     }
 }
@@ -245,8 +272,8 @@ async fn write_messages<W>(
 where
     W: AsyncFileWriter + Unpin + Send,
 {
-    let mut tick_builder = TickBuilder::new(tick_fd, cfg.tick_batch_size)?;
-    let mut token_builder = TokenBuilder::new(token_fd, cfg.token_batch_size)?;
+    let mut tick_builder = TickBuilder::new(tick_fd, cfg.arrow_batch_size)?;
+    let mut token_builder = TokenBuilder::new(token_fd, cfg.arrow_batch_size)?;
     let epoch = match &cfg.input {
         &Input::Local { .. } => 0,
         &Input::Remote { epoch, .. } => epoch,
@@ -259,13 +286,13 @@ where
         match msg {
             Message::Tick(slot, tx, event) => {
                 tick_builder.append(slot, tx, event);
-                if tick_builder.rows() >= cfg.tick_batch_size {
+                if tick_builder.rows() >= cfg.arrow_batch_size {
                     tick_builder.write().await?;
                 }
             }
             Message::Token(slot, tx, event) => {
                 token_builder.append(slot, tx, event);
-                if token_builder.rows() >= cfg.token_batch_size {
+                if token_builder.rows() >= cfg.arrow_batch_size {
                     token_builder.write().await?;
                 }
             }
@@ -333,6 +360,8 @@ async fn stream_local(
     use tokio::io::AsyncSeekExt;
     use tokio::io::SeekFrom;
 
+    info!("Streaming local file: {}", path.as_ref());
+
     let mut fd = fs::File::open(path.as_ref()).await?;
     if offset > 0 {
         fd.seek(SeekFrom::Start(offset)).await?;
@@ -347,6 +376,9 @@ async fn stream_remote(epoch: u64, offset: u64) -> Result<(Pin<Box<dyn io::Async
 
     let client = reqwest::Client::new();
     let url = format!("https://files.old-faithful.net/{0}/epoch-{0}.car", epoch);
+
+    info!("Streaming remote file: {}", url);
+
     let mut req = client.request(reqwest::Method::GET, url);
 
     if offset > 0 {
