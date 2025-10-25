@@ -11,6 +11,9 @@ use url::Url;
 use crate::{Result, open_store};
 
 const DEFAULT_CHECKPOINT_FILE: &str = "checkpoint.toml";
+const MESSAGE_QUEUE_SIZE: usize = 100;
+const ARROW_BATCH_SIZE: usize = 1000;
+const GCP_LOG_NAME: &str = "solana-parser";
 
 #[derive(Debug, clap::Parser)]
 #[command(version, about, long_about = None)]
@@ -18,24 +21,28 @@ pub struct Cli {
     #[arg(
         long = "checkpoint-file",
         value_name = "FILE",
-        default_value = DEFAULT_CHECKPOINT_FILE
+        default_value = DEFAULT_CHECKPOINT_FILE,
+        env = "CHECKPOINT_FILE"
     )]
     pub checkpoint_file: String,
 
-    #[arg(long = "data-dir", value_name = "DIR", default_value = "data")]
+    #[arg(
+        long = "data-dir",
+        value_name = "DIR",
+        default_value = "data",
+        env = "DATA_DIR"
+    )]
     pub data_dir: String,
 
-    #[arg(long = "tick-queue-size", default_value = "1000")]
-    pub tick_queue_size: usize,
+    #[arg(long = "no-progress", default_value_t = false, env = "NO_PROGRESS")]
+    pub no_progress: bool,
 
-    #[arg(long = "tick-batch-size", default_value = "10000")]
-    pub tick_batch_size: usize,
-
-    #[arg(long = "token-queue-size", default_value = "10")]
-    pub token_queue_size: usize,
-
-    #[arg(long = "token-batch-size", default_value = "100")]
-    pub token_batch_size: usize,
+    #[arg(
+        long = "enable-gcloud-log",
+        default_value_t = false,
+        env = "ENABLE_GCLOUD_LOG"
+    )]
+    pub gcloud_log: bool,
 
     #[command(flatten)]
     pub input: InputGroup,
@@ -44,13 +51,18 @@ pub struct Cli {
 #[derive(Debug, clap::Args)]
 #[group(required = true, multiple = false)]
 pub struct InputGroup {
-    #[arg(short = 'e', long = "epoch")]
+    #[arg(short = 'e', long = "epoch", value_name = "EPOCH", env = "EPOCH")]
     pub epoch: Option<u64>,
 
-    #[arg(short = 'r', long = "resume", default_value_t = false)]
+    #[arg(short = 'r', long = "resume", default_value_t = false, env = "RESUME")]
     pub resume: bool,
 
-    #[arg(short = 'l', long = "local-file", value_name = "FILE")]
+    #[arg(
+        short = 'l',
+        long = "local-file",
+        value_name = "FILE",
+        env = "LOCAL_FILE"
+    )]
     pub local_file: Option<String>,
 }
 
@@ -65,10 +77,11 @@ pub struct Configuration {
     pub data_dir: Url,
     pub checkpoint_file: Url,
     pub input: Input,
-    pub tick_queue_size: usize,
-    pub token_queue_size: usize,
-    pub tick_batch_size: usize,
-    pub token_batch_size: usize,
+
+    pub enable_progress: bool,
+    pub gcloud_log: Option<String>,
+    pub message_queue_size: usize,
+    pub arrow_batch_size: usize,
 }
 
 impl Configuration {
@@ -89,11 +102,11 @@ impl Configuration {
         Ok(Self {
             data_dir,
             checkpoint_file,
-            tick_queue_size: cli.tick_queue_size,
-            token_queue_size: cli.token_queue_size,
-            tick_batch_size: cli.tick_batch_size,
-            token_batch_size: cli.token_batch_size,
             input,
+            gcloud_log: cli.gcloud_log.then(|| GCP_LOG_NAME.to_string()),
+            message_queue_size: MESSAGE_QUEUE_SIZE,
+            arrow_batch_size: ARROW_BATCH_SIZE,
+            enable_progress: !cli.no_progress,
         })
     }
 
