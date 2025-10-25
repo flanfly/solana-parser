@@ -2,6 +2,22 @@
 name = "solana-parser"
 version = "0.1.0"
 edition = "2024"
+authors = ["Kai Michaelis <seu@das-labor.org>"]
+description = "Reads Solana blockchain data from Old Faithful and extracts pump.fun coin data into Parquet files."
+license = "AGPL-3.0-only"
+
+[package.metadata.deb]
+depends = ["libssl3t64", "ca-certificates"]
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/solana-parser", "/usr/bin/", "755"],
+]
+maintainer-scripts = "debian/"
+systemd-units = { enable = true }
+
+[profile.release]
+strip = true
 
 [[bin]]
 name = "solana-parser"

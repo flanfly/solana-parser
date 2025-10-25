@@ -24,11 +24,20 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+    - uses: taiki-e/cache-cargo-install-action@v2
+      with:
+        tool: cargo-deb
     - run: cargo build --locked --release --target aarch64-unknown-linux-gnu
+    - run: cargo deb --locked --target aarch64-unknown-linux-gnu
     - uses: actions/upload-artifact@v4
       with:
-        name: arm64-binary
+        name: solana-parser
         path: target/aarch64-unknown-linux-gnu/release/solana-parser
+    - uses: actions/upload-artifact@v4
+      with:
+        name: solana-parser.deb
+        path: target/aarch64-unknown-linux-gnu/debian/solana-parser_*.deb
     - env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       if: github.ref_type == 'tag'

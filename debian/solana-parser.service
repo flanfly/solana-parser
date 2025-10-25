@@ -1,0 +1,21 @@
+[Unit]
+Description=solana-parser
+After=network-online.target
+
+[Service]
+DynamicUser=yes
+StateDirectory=solana-parser
+WorkingDirectory=/var/lib/solana-parser
+
+EnvironmentFile=/etc/solana-parser.env
+ExecStart=/usr/bin/solana-parser --no-progress
+
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
