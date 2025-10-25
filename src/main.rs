@@ -217,7 +217,7 @@ impl<R: io::AsyncRead + Unpin> io::AsyncRead for ProgressReader<R> {
 
             self.position.fetch_add(read_bytes, Ordering::Relaxed);
             if let Some(progress) = &self.progress {
-                progress.set_position(self.position());
+                progress.inc(read_bytes);
             }
         }
 
