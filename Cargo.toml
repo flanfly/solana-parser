@@ -24,11 +24,13 @@ name = "solana-parser"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.100"
 arrow = "56.2.0"
 borsh = "1.5.7"
 clap = { version = "4.5.49", features = ["derive", "env"] }
 env_logger = { version = "0.11.8", features = ["kv"] }
 futures-util = "0.3.31"
+gethostname = "1.1"
 indicatif = "0.18.0"
 indicatif-log-bridge = "0.2.3"
 log = { version = "0.4.28", features = ["kv", "kv_serde", "serde"] }
