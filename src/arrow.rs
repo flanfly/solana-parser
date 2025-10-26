@@ -124,11 +124,6 @@ impl<W: AsyncFileWriter + Send + Unpin> TickBuilder<W> {
         self.writer.write(&batch).await.map_err(|e| e.into())
     }
 
-    pub async fn flush(&mut self) -> Result<()> {
-        self.write().await?;
-        self.writer.flush().await.map_err(|e| e.into())
-    }
-
     pub async fn close(mut self) {
         let _ = self.write().await;
         let _ = self.writer.close().await;
@@ -247,11 +242,6 @@ impl<W: AsyncFileWriter + Send + Unpin> TokenBuilder<W> {
             ],
         )?;
         self.writer.write(&batch).await.map_err(|e| e.into())
-    }
-
-    pub async fn flush(&mut self) -> Result<()> {
-        self.write().await?;
-        self.writer.flush().await.map_err(|e| e.into())
     }
 
     pub async fn close(mut self) {
