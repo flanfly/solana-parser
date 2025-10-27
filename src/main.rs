@@ -72,7 +72,7 @@ async fn run() -> Result<()> {
     let bars = setup_log(cfg.gcloud_log.as_deref())?;
     info!("solana-parser {}", VERSION);
 
-    let nodeid = format!("{}-a", gethostname().to_string_lossy().into_owned());
+    let nodeid = gethostname().to_string_lossy().into_owned();
     info!("Writing data to: {}", cfg.output_dir);
 
     if cfg.output_dir.scheme() == "file" {
