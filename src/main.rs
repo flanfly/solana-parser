@@ -207,7 +207,7 @@ async fn run_with_reader(
         None
     };
 
-    let mut progress_rd = ProgressReader::new(epoch_rd, progress.clone());
+    let mut progress_rd = ProgressReader::new(epoch_rd, offset, progress.clone());
 
     let (ticks_wr, tokens_wr) = try_join!(
         open_parquet_file(epoch, offset, &cfg, "ticks"),
@@ -266,11 +266,14 @@ struct ProgressReader<R> {
 }
 
 impl<R: io::AsyncRead + Unpin> ProgressReader<R> {
-    fn new(inner: R, progress: Option<ProgressBar>) -> Self {
+    fn new(inner: R, offset: u64, progress: Option<ProgressBar>) -> Self {
+        if let Some(ref p) = progress {
+            p.set_position(offset);
+        }
         Self {
             inner,
             progress,
-            position: Default::default(),
+            position: AtomicU64::new(offset),
         }
     }
 
