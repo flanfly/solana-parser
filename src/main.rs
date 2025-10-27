@@ -185,16 +185,17 @@ async fn run_with_reader(
     cfg: Arc<Configuration>,
     bars: MultiProgress,
 ) -> Result<u64> {
-    let style = "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})";
-    let eta_lambda = |state: &ProgressState, w: &mut dyn fmt::Write| {
-        write!(w, "{:.1}s", HumanDuration(state.eta())).unwrap();
-    };
-
-    info!("Total input size: {} bytes", total_size);
+    info!(
+        "Start processing epoch={} size={} offset={}",
+        epoch, total_size, offset
+    );
 
     let progress = if cfg.enable_progress {
+        let style = "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})";
+        let eta_lambda = |state: &ProgressState, w: &mut dyn fmt::Write| {
+            write!(w, "{:.1}s", HumanDuration(state.eta())).unwrap();
+        };
         let p = bars.add(ProgressBar::new(total_size));
-        p.set_position(offset);
         p.reset_eta();
         p.set_style(
             ProgressStyle::with_template(style)?
