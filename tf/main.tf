@@ -2,11 +2,16 @@ locals {
   project_id = "pump-fun-dth3"
   region     = "asia-southeast1"
   machine    = "c4a-standard-2"
+  image      = "ubuntu-minimal-2404-lts-arm64"
 
-  version   = "v2"
-  epoch     = "800"
-  user_name = "app"
-  nodes     = 0
+  version = "v7"
+  epochs  = "800-850"
+  nodes   = 2
+
+  worker_roles = [
+    "roles/monitoring.metricWriter",
+    "roles/logging.logWriter"
+  ]
 }
 
 provider "google" {
@@ -32,8 +37,7 @@ resource "google_storage_bucket_object" "startup_script" {
   content = templatefile("${path.module}/startup.sh.tftpl", {
     bucket_name = google_storage_bucket.output.name
     version     = local.version,
-    epoch       = local.epoch,
-    user_name   = local.user_name,
+    epochs      = local.epochs,
   })
 }
 
@@ -50,8 +54,10 @@ resource "google_service_account" "worker" {
 }
 
 resource "google_project_iam_member" "worker_iam" {
+  for_each = toset(local.worker_roles)
+
   project = local.project_id
-  role    = "roles/logging.logWriter"
+  role    = each.key
   member  = "serviceAccount:${google_service_account.worker.email}"
 }
 
@@ -87,7 +93,7 @@ resource "google_compute_region_instance_template" "default" {
   region       = local.region
 
   disk {
-    source_image = "projects/debian-cloud/global/images/family/debian-13-arm64"
+    source_image = local.image
     auto_delete  = true
     boot         = true
     disk_type    = "hyperdisk-balanced"
@@ -95,10 +101,11 @@ resource "google_compute_region_instance_template" "default" {
   }
 
   scheduling {
-    automatic_restart   = false
-    provisioning_model  = "SPOT"
-    preemptible         = true
-    on_host_maintenance = "TERMINATE"
+    automatic_restart           = false
+    instance_termination_action = "STOP"
+    provisioning_model          = "SPOT"
+    preemptible                 = true
+    on_host_maintenance         = "TERMINATE"
   }
 
   network_interface {
@@ -119,6 +126,7 @@ resource "google_compute_region_instance_template" "default" {
   lifecycle {
     create_before_destroy = true
   }
+  depends_on = [google_storage_bucket_object.startup_script]
 }
 
 resource "google_compute_region_instance_group_manager" "default" {
