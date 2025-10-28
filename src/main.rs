@@ -165,6 +165,9 @@ async fn run() -> Result<()> {
                 if let Err(e) = unlock_epoch(epoch, &cfg, &nodeid).await {
                     error!("Failed to unlock epoch {}: {}", epoch, e);
                 }
+
+                info!("Finalizing epoch {}", epoch);
+                finalize_epoch(epoch, &cfg).await?;
             }
             Err(e) => {
                 error!("Error locking epoch: {}", e);
@@ -448,8 +451,18 @@ async fn lock_epoch(
     cfg: &Configuration,
     nodeid: &str,
 ) -> Result<Option<u64>> {
+    let store = open_store(&cfg.output_dir).context("open_store for output_dir")?;
     for e in epoch.clone() {
-        match try_lock_epoch(e, cfg, nodeid).await {
+        if store
+            .head(&format!("epoch-{}.done", e).as_str().into())
+            .await
+            .is_ok()
+        {
+            info!("Epoch {} is already marked done, skipping", e);
+            continue;
+        }
+
+        match try_lock_epoch(e, store.clone(), nodeid).await {
             Ok(()) => {
                 return Ok(Some(e));
             }
@@ -462,8 +475,17 @@ async fn lock_epoch(
     Ok(None)
 }
 
-async fn try_lock_epoch(epoch: u64, cfg: &Configuration, nodeid: &str) -> Result<()> {
-    let store = open_store(&cfg.output_dir).context("open_store for sync_dir")?;
+async fn finalize_epoch(epoch: u64, cfg: &Configuration) -> Result<()> {
+    let store = open_store(&cfg.output_dir).context("open_store for output_dir")?;
+    let loc = format!("epoch-{}.done", epoch);
+    store
+        .put(&loc.as_str().into(), Vec::new().into())
+        .await
+        .context("put epoch done file")?;
+    Ok(())
+}
+
+async fn try_lock_epoch(epoch: u64, store: Arc<dyn ObjectStore>, nodeid: &str) -> Result<()> {
     let loc = format!("epoch-{}.lock.toml", epoch);
     let maxage = time::SystemTime::now()
         .checked_sub(std::time::Duration::from_secs(24 * 60 * 60))
