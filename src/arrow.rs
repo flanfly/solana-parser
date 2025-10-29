@@ -28,6 +28,7 @@ static TICK_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
         Field::new("virtual_tokens", DataType::UInt64, false),
         Field::new("real_sol", DataType::UInt64, false),
         Field::new("real_token", DataType::UInt64, false),
+        Field::new("user", DataType::Utf8, false),
     ]))
 });
 
@@ -48,6 +49,7 @@ pub struct TickBuilder<W: AsyncFileWriter + Unpin + Send> {
     col_virtual_token: UInt64Builder,
     col_real_sol: UInt64Builder,
     col_real_token: UInt64Builder,
+    col_user: StringBuilder,
 }
 
 impl<W: AsyncFileWriter + Send + Unpin> TickBuilder<W> {
@@ -71,6 +73,7 @@ impl<W: AsyncFileWriter + Send + Unpin> TickBuilder<W> {
             col_virtual_token: UInt64Builder::with_capacity(batch_size),
             col_real_sol: UInt64Builder::with_capacity(batch_size),
             col_real_token: UInt64Builder::with_capacity(batch_size),
+            col_user: StringBuilder::with_capacity(batch_size, batch_size * 44),
         };
 
         Ok(t)
@@ -101,6 +104,7 @@ impl<W: AsyncFileWriter + Send + Unpin> TickBuilder<W> {
         self.col_real_sol.append_value(event.virtual_sol_reserves);
         self.col_real_token
             .append_value(event.virtual_token_reserves);
+        self.col_user.append_value(event.user.to_string());
     }
 
     pub async fn write(&mut self) -> Result<()> {
