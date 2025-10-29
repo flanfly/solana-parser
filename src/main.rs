@@ -166,8 +166,10 @@ async fn run() -> Result<()> {
                     error!("Failed to unlock epoch {}: {}", epoch, e);
                 }
 
-                info!("Finalizing epoch {}", epoch);
-                finalize_epoch(epoch, &cfg).await?;
+                if !*exit_rx.borrow() {
+                    info!("Finalizing epoch {}", epoch);
+                    finalize_epoch(epoch, &cfg).await?;
+                }
             }
             Err(e) => {
                 error!("Error locking epoch: {}", e);
