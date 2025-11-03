@@ -257,7 +257,9 @@ async fn run_with_reader(
         });
     }
 
-    msg_tx.send(Message::Close).await?;
+    if let Err(e) = msg_tx.send(Message::Close).await {
+        error!("Failed to send Message::Close during shutdown: {:?}", e);
+    }
     worktasks.join_all().await;
     write_task.await??;
 
