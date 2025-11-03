@@ -123,6 +123,7 @@ impl<W: AsyncFileWriter + Send + Unpin> TickBuilder<W> {
                 Arc::new(self.col_virtual_token.finish()),
                 Arc::new(self.col_real_sol.finish()),
                 Arc::new(self.col_real_token.finish()),
+                Arc::new(self.col_user.finish()),
             ],
         )?;
         self.writer.write(&batch).await.map_err(|e| e.into())
